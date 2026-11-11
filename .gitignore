@@ -1,0 +1,13 @@
+/bin/
+/.demo/
+*.db
+*.db.lock
+*.sock
+*.pem
+.env
+.env.*
+/config/github-botd.json
+/config/secrets/
+coverage.out
+*.test
+.DS_Store

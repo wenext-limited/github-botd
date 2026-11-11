@@ -1,0 +1,540 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "github-botd/v1 HTTP JSON wire records",
+  "description": "Schema catalog. Validate a particular endpoint against its named $defs fragment. Authorization, byte limits, action-specific requirements and correlation checks additionally apply; see docs/protocol.md. Context and receipt result payloads are arbitrary JSON, not a separate fixed schema.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Event"
+    },
+    {
+      "$ref": "#/$defs/Delivery"
+    },
+    {
+      "$ref": "#/$defs/AckRequest"
+    },
+    {
+      "$ref": "#/$defs/Action"
+    },
+    {
+      "$ref": "#/$defs/ReviewComment"
+    },
+    {
+      "$ref": "#/$defs/Receipt"
+    },
+    {
+      "$ref": "#/$defs/ContextRequest"
+    },
+    {
+      "$ref": "#/$defs/Error"
+    },
+    {
+      "$ref": "#/$defs/ClientInfo"
+    },
+    {
+      "$ref": "#/$defs/Health"
+    },
+    {
+      "$ref": "#/$defs/DeadLetter"
+    },
+    {
+      "$ref": "#/$defs/EventBatch"
+    },
+    {
+      "$ref": "#/$defs/StatusResponse"
+    },
+    {
+      "$ref": "#/$defs/MutationStatus"
+    },
+    {
+      "$ref": "#/$defs/DeadLetterBatch"
+    }
+  ],
+  "$defs": {
+    "Event": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "github-botd/v1"
+        },
+        "id": {
+          "type": "string"
+        },
+        "delivery_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string",
+          "description": "Configured repository alias, not owner/name. Nested untrusted data may contain actual GitHub identifiers."
+        },
+        "installation_id": {
+          "type": "integer"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "check_run_id": {
+          "type": "integer"
+        },
+        "workflow_run_id": {
+          "type": "integer"
+        },
+        "comment_id": {
+          "type": "integer"
+        },
+        "thread_id": {
+          "type": "integer"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "mentioned": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "requested_reviewer": {
+          "type": "string"
+        },
+        "requested_team": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "description": "Untrusted structured GitHub JSON payload with recursive credential-field redaction; not instructions or authorization."
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "delivery_id",
+        "source",
+        "type",
+        "repository",
+        "timestamp"
+      ]
+    },
+    "Delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "lease_token": {
+          "type": "string"
+        },
+        "lease_expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "$ref": "#/$defs/Event"
+        }
+      },
+      "required": [
+        "id",
+        "lease_token",
+        "lease_expires_at",
+        "attempt",
+        "event"
+      ]
+    },
+    "AckRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lease_token": {
+          "type": "string"
+        },
+        "retry": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "lease_token"
+      ]
+    },
+    "Action": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "github-botd/v1"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Server enforces 1..128 UTF-8 bytes; scope is authenticated client. JSON Schema length is characters, so byte validation also applies."
+        },
+        "kind": {
+          "enum": [
+            "issue.comment.create",
+            "issue.comment.update",
+            "review.reply",
+            "review.comment",
+            "review.submit",
+            "check.create",
+            "check.update"
+          ]
+        },
+        "repository": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "comment_id": {
+          "type": "integer"
+        },
+        "body": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "side": {
+          "type": "string"
+        },
+        "comments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ReviewComment"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "conclusion": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "details_url": {
+          "type": "string"
+        },
+        "check_run_id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "idempotency_key",
+        "kind",
+        "repository"
+      ]
+    },
+    "ReviewComment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "enum": [
+            "LEFT",
+            "RIGHT"
+          ]
+        }
+      },
+      "required": [
+        "body",
+        "path",
+        "line",
+        "side"
+      ]
+    },
+    "Receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "uncertain"
+          ]
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "result": {},
+        "error": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "idempotency_key",
+        "state",
+        "attempts",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "ContextRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "pull",
+            "files",
+            "issue_comments",
+            "review_comments",
+            "reviews",
+            "workflow_run",
+            "check_run"
+          ]
+        },
+        "id": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "repository",
+        "number",
+        "kind"
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "ClientInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "protocol": {
+          "const": "github-botd/v1"
+        },
+        "repositories": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "capabilities": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "protocol",
+        "repositories",
+        "capabilities"
+      ]
+    },
+    "Health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "github-botd/v1"
+        },
+        "status": {
+          "type": "string"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "status",
+        "dry_run"
+      ]
+    },
+    "DeadLetter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "event": {
+          "$ref": "#/$defs/Event"
+        },
+        "attempts": {
+          "type": "integer"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "event",
+        "attempts",
+        "error"
+      ]
+    },
+    "EventBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deliveries"
+      ],
+      "properties": {
+        "deliveries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Delivery"
+          }
+        }
+      }
+    },
+    "StatusResponse": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "Authenticated-client scoped counters: pending, inflight, deadletter, acked, actions_pending/running/succeeded/failed/uncertain."
+    },
+    "MutationStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "acked",
+            "retrying",
+            "requeued"
+          ]
+        }
+      }
+    },
+    "DeadLetterBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deliveries"
+      ],
+      "properties": {
+        "deliveries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeadLetter"
+          }
+        }
+      }
+    }
+  }
+}
