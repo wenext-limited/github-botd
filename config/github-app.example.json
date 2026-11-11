@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "state_dir": "../state-app",
+  "dry_run": true,
+  "ipc": {"socket": "../run-app/github-botd.sock"},
+  "webhook": {"bind": "127.0.0.1:8787", "sources": {"main": {"secret_env": "GITHUB_BOTD_WEBHOOK_SECRET", "installation_ids": [123456]}}},
+  "github": {"apps": [{"app_id": 12345, "private_key_file": "secrets/app.pem", "bot_login": "your-app[bot]", "installation_ids": [123456]}]},
+  "repositories": {"project": {"full_name": "your-org/your-repo", "installation_id": 123456}},
+  "clients": {
+    "agent": {"token_env": "GITHUB_BOTD_AGENT_TOKEN", "repositories": ["project"], "capabilities": ["events.read", "events.replay", "context.read", "review.reply", "review.submit"]},
+    "ci": {"token_env": "GITHUB_BOTD_CI_TOKEN", "repositories": ["project"], "capabilities": ["events.read", "events.replay", "context.read", "check.create", "check.update", "actions.proactive"]}
+  },
+  "routes": [
+    {"id": "agent-mentions", "repositories": ["project"], "events": ["issue_comment", "pull_request_review_comment"], "actions": ["created"], "trigger": "mention", "names": ["your-app", "your-app[bot]"], "actors": ["your-trusted-user"], "clients": ["agent"]},
+    {"id": "ci-events", "repositories": ["project"], "events": ["workflow_run", "check_run", "check_suite"], "trigger": "any", "actors": ["your-trusted-user", "github-actions[bot]"], "include_bots": true, "clients": ["ci"]}
+  ],
+  "poll": {"enabled": false},
+  "limits": {"max_body_bytes": 2097152, "lease_seconds": 120, "max_attempts": 8, "max_pending": 100000}
+}
