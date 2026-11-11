@@ -1,0 +1,9 @@
+.git
+bin
+state*
+run*
+.demo
+config/secrets
+config/github-botd.json
+*.pem
+.env*
