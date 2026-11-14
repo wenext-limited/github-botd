@@ -4,7 +4,7 @@
 
 ## Components
 
-- `internal/config`: strict configuration, repository aliases, installation assignments, client credentials, explicit grants, routes, listener and resource bounds. Secrets come from environment variables or private files.
+- `internal/config`: strict configuration, repository aliases, installation assignments, client credentials, explicit grants, routes, listener and resource bounds. Secrets come from environment variables or private files. The daemon checks configuration every second and on SIGHUP, publishing immutable config/adapter/handler generations after validation and durable alias checks. Invalid candidates preserve the active generation; listeners and storage stay open. See [reload boundaries](operations.md#live-configuration-reload).
 - `internal/github`: GitHub App JWT/installation-token or machine-user authentication, webhook normalization, bounded context reads, polling, and seven allowlisted outbound action adapters. App private keys and GitHub access tokens stay on this side of the boundary.
 - `internal/transport`: separate signed webhook ingress and local bearer-authenticated HTTP IPC. JSON is the implemented wire format; no gRPC server is implemented.
 - `internal/gateway`: identity checks, deterministic routing, event/action correlation, current authorization checks, polling loop, and outbox execution.

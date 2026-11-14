@@ -214,6 +214,12 @@ func (g *Gateway) Context(ctx context.Context, client string, r v1.ContextReques
 
 // RunOutbox never retries an ambiguous GitHub write. Only explicit pre-execution rate limits are safe.
 func (g *Gateway) RunOutbox(ctx context.Context) error {
+	return RunOutbox(ctx, func() *Gateway { return g })
+}
+
+// RunOutbox selects an immutable configuration for each action. Reloading never
+// cancels an outbound write or starts a second outbox worker.
+func RunOutbox(ctx context.Context, current func() *Gateway) error {
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -222,13 +228,16 @@ func (g *Gateway) RunOutbox(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 		}
-		pending, err := g.Store.NextAction()
+		pending, err := current().Store.NextAction()
 		if err != nil {
 			return fmt.Errorf("claim outbox: %w", err)
 		}
 		if pending == nil {
 			continue
 		}
+		// Claiming can wait on a store transaction. Select policy afterwards,
+		// so a reload during that wait is reflected before authorization.
+		g := current()
 		a := pending.Action
 		repo, ok := g.Config.Repositories[a.Repository]
 		if !ok {
@@ -281,50 +290,75 @@ func (g *Gateway) RunPolling(ctx context.Context) error {
 	if !g.Config.Poll.Enabled {
 		return nil
 	}
-	poller, ok := g.GitHub.(Poller)
-	if !ok {
-		return errors.New("configured adapter does not support polling")
-	}
-	run := func() {
-		for _, alias := range g.Config.Poll.Repositories {
-			repo := g.Config.Repositories[alias]
-			key := "poll:" + alias
-			cursor, err := g.Store.GetMeta(key)
-			if err != nil && !errors.Is(err, store.ErrNotFound) {
-				g.Log.Error("poll cursor unavailable", "repository", alias)
-				continue
-			}
-			call, cancel := context.WithTimeout(ctx, 45*time.Second)
-			events, next, err := poller.PollRepository(call, repo.InstallationID, repo.FullName, cursor)
-			cancel()
-			if err != nil {
-				g.Log.Warn("poll failed; cursor unchanged", "repository", alias)
-				continue
-			}
-			complete := true
-			for _, e := range events {
-				e.InstallationID = repo.InstallationID
-				if _, err = g.ingestEvent(key, e.DeliveryID, e); err != nil {
-					complete = false
-					break
-				}
-			}
-			if complete {
-				if err = g.Store.SetMeta(key, next); err != nil {
-					g.Log.Error("poll cursor persist failed", "repository", alias)
-				}
-			}
-		}
-	}
-	run()
-	tick := time.NewTicker(time.Duration(g.Config.Poll.IntervalSeconds) * time.Second)
+	return RunPolling(ctx, func() *Gateway { return g })
+}
+
+// RunPolling observes enablement, interval and repository changes without
+// overlapping poll batches. An in-flight batch finishes using its snapshot.
+func RunPolling(ctx context.Context, current func() *Gateway) error {
+	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
+	var previous *Gateway
+	var next time.Time
 	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		g := current()
+		if g != previous {
+			previous = g
+			next = time.Time{}
+		}
+		if g.Config.Poll.Enabled && !time.Now().Before(next) {
+			if err := g.pollOnce(ctx); err != nil {
+				return err
+			}
+			next = time.Now().Add(time.Duration(g.Config.Poll.IntervalSeconds) * time.Second)
+		}
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
-			run()
 		}
 	}
+}
+
+func (g *Gateway) pollOnce(ctx context.Context) error {
+	poller, ok := g.GitHub.(Poller)
+	if !ok {
+		return errors.New("configured adapter does not support polling")
+	}
+	for _, alias := range g.Config.Poll.Repositories {
+		if ctx.Err() != nil {
+			return nil
+		}
+		repo := g.Config.Repositories[alias]
+		key := "poll:" + alias
+		cursor, err := g.Store.GetMeta(key)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			g.Log.Error("poll cursor unavailable", "repository", alias)
+			continue
+		}
+		call, cancel := context.WithTimeout(ctx, 45*time.Second)
+		events, next, err := poller.PollRepository(call, repo.InstallationID, repo.FullName, cursor)
+		cancel()
+		if err != nil {
+			g.Log.Warn("poll failed; cursor unchanged", "repository", alias)
+			continue
+		}
+		complete := true
+		for _, e := range events {
+			e.InstallationID = repo.InstallationID
+			if _, err = g.ingestEvent(key, e.DeliveryID, e); err != nil {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			if err = g.Store.SetMeta(key, next); err != nil {
+				g.Log.Error("poll cursor persist failed", "repository", alias)
+			}
+		}
+	}
+	return nil
 }

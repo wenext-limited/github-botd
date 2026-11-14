@@ -25,6 +25,45 @@ func event(id string) v1.Event { return v1.Event{ID: id, Repository: "o/r", Type
 func action(key string) v1.Action {
 	return v1.Action{IdempotencyKey: key, Kind: "issue_comment", Repository: "o/r", Body: "hi"}
 }
+
+func TestReconfigureLimitsAndBindingRollback(t *testing.T) {
+	s := openTest(t)
+	if err := s.Reconfigure(map[string]string{"repo": "acme/repo:0"}, Options{MaxAttempts: 1, MaxPending: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("alice", action("one")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("alice", action("two")); !errors.Is(err, ErrCapacity) {
+		t.Fatal("new capacity not enforced", err)
+	}
+	if err := s.Reconfigure(map[string]string{"repo": "acme/other:0", "new": "acme/new:0"}, Options{MaxAttempts: 2, MaxPending: 2}); !errors.Is(err, ErrConflict) {
+		t.Fatal("changed alias accepted", err)
+	}
+	if _, err := s.Enqueue("alice", action("two")); !errors.Is(err, ErrCapacity) {
+		t.Fatal("rejected config changed limits", err)
+	}
+	// A failed reload must not pin aliases from the rest of its candidate.
+	if err := s.Reconfigure(map[string]string{"repo": "acme/repo:0", "new": "acme/different:0"}, Options{MaxAttempts: 2, MaxPending: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue("alice", action("two")); err != nil {
+		t.Fatal("increased capacity not applied", err)
+	}
+	if _, err := s.Ingest("source", "event", event("event"), []string{"alice"}); err != nil {
+		t.Fatal(err)
+	}
+	delivery := claim(t, s, "alice")
+	if err := s.Reconfigure(nil, Options{MaxAttempts: 1, MaxPending: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ack("alice", delivery.ID, delivery.LeaseToken, true, "retry"); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := s.ListDeadLetters("alice", []string{"o/r"}, 10); err != nil || len(rows) != 1 {
+		t.Fatal("new attempt cap not applied", rows, err)
+	}
+}
 func mustIngest(t *testing.T, s *Store, id string) {
 	t.Helper()
 	ok, err := s.Ingest("app1/route1", id, event(id), []string{"alice", "bob"})

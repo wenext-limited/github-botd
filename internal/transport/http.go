@@ -181,6 +181,10 @@ func IPC(g *gateway.Gateway) http.Handler {
 		}
 		until := time.Now().Add(time.Duration(wait) * time.Second)
 		for {
+			if r.Context().Err() != nil {
+				jsonResponse(w, 200, map[string]any{"deliveries": []v1.Delivery{}})
+				return
+			}
 			deliveries, err := g.Store.ClaimAllowed(id, limit, time.Duration(g.Config.Limits.LeaseSeconds)*time.Second, g.Config.Clients[id].Repositories)
 			if err != nil {
 				problem(w, 503, "store_unavailable", "cannot claim events")
@@ -197,6 +201,7 @@ func IPC(g *gateway.Gateway) http.Handler {
 			select {
 			case <-r.Context().Done():
 				timer.Stop()
+				jsonResponse(w, 200, map[string]any{"deliveries": []v1.Delivery{}})
 				return
 			case <-timer.C:
 			}

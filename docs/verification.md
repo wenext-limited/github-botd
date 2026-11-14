@@ -13,6 +13,14 @@ Validated locally on macOS/arm64 using Go 1.26.4. This report describes executed
 
 The local sandbox initially blocked temporary socket binding. Those network-free tests were rerun with approved local-listener permission and passed; they were not skipped.
 
+## Live reload verification
+
+`cmd/github-botd/reload_test.go` checks bearer/webhook-secret rotation, updated routing with retained deliveries, unchanged-config reuse, invalid JSON/config/credentials, immutable listener/state paths, alias identity rejection, concurrent HTTP requests, and prompt retirement of event long polls. A blocked fake GitHub write completes successfully through a reload while the next queued action fails after its grant is revoked. A loopback fake GitHub endpoint verifies forced reload of a machine-token file.
+
+`cmd/github-botd/reload_process_test.go` starts the actual daemon entrypoint as a subprocess and uses the SDK over its private Unix socket. It verifies automatic file-only bearer rotation, invalid-edit rejection through a real SIGHUP, recovery after fixing the JSON, forced reload of unchanged JSON, and graceful SIGTERM without restarting the process during the checks. Gateway/store tests also cover live polling enablement/interval changes/disablement, retained polling cursors, live capacity/attempt bounds, and rollback when repository binding validation fails. These tests run in both the normal and race-detector suites.
+
+Seven reload safeguards were separately ablated in temporary source copies: generation publication, fixed-resource validation, long-poll cancellation, durable alias validation, store-limit publication, fresh outbox snapshots, and fresh polling snapshots. Each targeted regression test failed when its safeguard was removed; all seven mutations compiled. No ablated source was retained in this checkout. The design checks show why a single startup snapshot, uncancelled long polls, or changing config without updating worker/store behavior do not satisfy live reload.
+
 ## Requested flows
 
 `internal/transport/flows_test.go` uses the real webhook validator, routing, persistent store, HTTP IPC handler, outbox executor, and GitHub REST adapter. Only the external GitHub HTTP transport is replaced with controlled responses.

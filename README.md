@@ -69,6 +69,8 @@ make check
 
 Paths in configuration resolve relative to the configuration file. The daemon creates new state/socket directories as owner-only; existing permissive or symlink leaf directories are rejected, not modified. Repository aliases are durably pinned to their repository+installation identity and cannot silently be reused for another target.
 
+Configuration changes reload automatically within about one second. Invalid edits keep the last valid configuration running. `SIGHUP` forces an immediate reload and reopens GitHub credential files. State-directory and listener-address changes require a restart; see [live reload behavior](docs/operations.md#live-configuration-reload).
+
 ## Clients, not a single agent
 
 - [`mock-client`](examples/mock-client): logs and ACKs normalized events.

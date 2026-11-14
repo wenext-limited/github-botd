@@ -98,7 +98,12 @@ type Limits struct {
 }
 
 func Load(path string) (*Config, error) {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 1024*1024+1))
 	if err != nil {
 		return nil, err
 	}

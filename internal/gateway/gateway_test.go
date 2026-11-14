@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -193,6 +194,54 @@ func TestPollingBootstrapsEmptyMetadata(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestPollingObservesConfigurationChanges(t *testing.T) {
+	g := fixture(t)
+	f := &fakeGitHub{polled: make(chan string, 4)}
+	g.GitHub = f
+	var active atomic.Pointer[Gateway]
+	active.Store(g)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunPolling(ctx, active.Load) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	// Enabling polling must work even when the daemon started with it disabled.
+	c := *g.Config
+	c.Poll = config.Poll{Enabled: true, IntervalSeconds: 30, Repositories: []string{"main"}}
+	active.Store(New(&c, g.Store, f))
+	waitPoll := func(expected string) {
+		t.Helper()
+		select {
+		case got := <-f.polled:
+			if got != expected {
+				t.Fatal("cursor changed across reload", got, expected)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("polling did not observe updated config")
+		}
+	}
+	waitPoll("")
+	// A new interval takes effect without waiting for the original 30s timer.
+	updated := c
+	updated.Poll.IntervalSeconds = 60
+	active.Store(New(&updated, g.Store, f))
+	waitPoll("cursor")
+	disabled := c
+	disabled.Poll.Enabled = false
+	active.Store(New(&disabled, g.Store, f))
+	select {
+	case <-f.polled:
+		t.Fatal("disabled polling ran")
+	case <-time.After(350 * time.Millisecond):
+	}
+	active.Store(New(&c, g.Store, f))
+	waitPoll("cursor")
 }
 func TestCheckUpdateExactEvent(t *testing.T) {
 	g := fixture(t)

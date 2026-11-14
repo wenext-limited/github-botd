@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	v1 "github.com/wenext-limited/github-botd/api/v1"
@@ -34,7 +35,7 @@ var bucketNames = []string{"events", "dedupe", "deliveries", "actions", "action_
 type Store struct {
 	db             *bolt.DB
 	now            func() time.Time
-	options        Options
+	options        atomic.Pointer[Options]
 	closeDirectory func() error
 }
 type delivery struct {
@@ -56,7 +57,7 @@ type PendingAction struct {
 }
 
 func Open(dir string) (*Store, error) { return OpenWithOptions(dir, Options{}) }
-func OpenWithOptions(dir string, options Options) (*Store, error) {
+func normalizeOptions(options Options) (Options, error) {
 	if options.MaxAttempts == 0 {
 		options.MaxAttempts = MaxAttempts
 	}
@@ -64,13 +65,21 @@ func OpenWithOptions(dir string, options Options) (*Store, error) {
 		options.MaxPending = 100000
 	}
 	if options.MaxAttempts < 1 || options.MaxAttempts > 30 || options.MaxPending < 1 {
-		return nil, fmt.Errorf("invalid store options")
+		return Options{}, fmt.Errorf("invalid store options")
+	}
+	return options, nil
+}
+func OpenWithOptions(dir string, options Options) (*Store, error) {
+	options, err := normalizeOptions(options)
+	if err != nil {
+		return nil, err
 	}
 	db, closeDirectory, err := openDatabase(dir)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, now: time.Now, options: options, closeDirectory: closeDirectory}
+	s := &Store{db: db, now: time.Now, closeDirectory: closeDirectory}
+	s.options.Store(&options)
 	err = db.Update(func(tx *bolt.Tx) error {
 		if m := tx.Bucket([]byte("meta")); m != nil {
 			if string(m.Get([]byte("schema"))) != "1" {
@@ -153,11 +162,12 @@ func (s *Store) Ingest(source, deliveryID string, event v1.Event, clients []stri
 	}
 	added := false
 	err := s.db.Update(func(tx *bolt.Tx) error {
+		options := s.options.Load()
 		key := scoped(source, deliveryID)
 		if b(tx, "dedupe").Get([]byte(key)) != nil {
 			return nil
 		}
-		if b(tx, "events").Stats().KeyN >= s.options.MaxPending || b(tx, "deliveries").Stats().KeyN+len(clients) > s.options.MaxPending {
+		if b(tx, "events").Stats().KeyN >= options.MaxPending || b(tx, "deliveries").Stats().KeyN+len(clients) > options.MaxPending {
 			return ErrCapacity
 		}
 		if b(tx, "events").Get([]byte(event.ID)) != nil {
@@ -216,6 +226,7 @@ func (s *Store) claim(client string, limit int, lease time.Duration, allowed map
 	}
 	out := []v1.Delivery{}
 	err := s.db.Update(func(tx *bolt.Tx) error {
+		options := s.options.Load()
 		now := s.now()
 		var updates []delivery
 		err := b(tx, "deliveries").ForEach(func(_, raw []byte) error {
@@ -233,7 +244,7 @@ func (s *Store) claim(client string, limit int, lease time.Duration, allowed map
 			if allowed != nil && !allowed[event.Repository] {
 				return nil
 			}
-			if d.Attempts >= s.options.MaxAttempts {
+			if d.Attempts >= options.MaxAttempts {
 				d.State = "dead"
 				d.Token = ""
 				d.Error = "maximum delivery attempts exhausted"
@@ -283,7 +294,7 @@ func (s *Store) Ack(client, id, token string, retry bool, reason string) error {
 		d.Error = reason
 		d.State = "acked"
 		if retry {
-			if d.Attempts >= s.options.MaxAttempts {
+			if d.Attempts >= s.options.Load().MaxAttempts {
 				d.State = "dead"
 			} else {
 				d.State = "pending"
@@ -363,7 +374,7 @@ func (s *Store) Enqueue(client string, action v1.Action) (v1.Receipt, error) {
 			receipt = old.Receipt
 			return nil
 		}
-		if b(tx, "actions").Stats().KeyN >= s.options.MaxPending {
+		if b(tx, "actions").Stats().KeyN >= s.options.Load().MaxPending {
 			return ErrCapacity
 		}
 		id, err := uid()
@@ -526,7 +537,7 @@ func (s *Store) ScheduleActionRetry(id string, after time.Duration, reason strin
 		}
 		a.Receipt.Error = reason
 		a.Receipt.UpdatedAt = stamp(s.now())
-		if a.Receipt.Attempts >= s.options.MaxAttempts {
+		if a.Receipt.Attempts >= s.options.Load().MaxAttempts {
 			a.Receipt.State = "failed"
 			a.Receipt.Error = "maximum safe retry attempts exhausted: " + reason
 		} else {
@@ -638,6 +649,20 @@ func (s *Store) BindRepositories(bindings map[string]string) error {
 		}
 		return nil
 	})
+}
+
+// Reconfigure preserves durable alias identities before publishing new limits.
+// A rejected binding or invalid option leaves the previous limits in place.
+func (s *Store) Reconfigure(bindings map[string]string, options Options) error {
+	options, err := normalizeOptions(options)
+	if err != nil {
+		return err
+	}
+	if err = s.BindRepositories(bindings); err != nil {
+		return err
+	}
+	s.options.Store(&options)
+	return nil
 }
 
 // ListDeadLetters returns bounded dead-letter context within current repository

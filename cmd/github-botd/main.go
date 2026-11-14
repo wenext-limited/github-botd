@@ -11,14 +11,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/wenext-limited/github-botd/internal/config"
 	"github.com/wenext-limited/github-botd/internal/gateway"
-	gh "github.com/wenext-limited/github-botd/internal/github"
 	"github.com/wenext-limited/github-botd/internal/store"
 	"github.com/wenext-limited/github-botd/internal/transport"
 )
@@ -44,14 +42,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	var github *gh.Client
-	var adapter gateway.GitHub
-	if len(c.GitHub.Apps) > 0 || c.GitHub.TokenEnv != "" || c.GitHub.TokenFile != "" {
-		github, err = gh.New(c.Auth(), gh.Options{BaseURL: c.GitHub.BaseURL})
-		if err != nil {
-			return err
-		}
-		adapter = github
+	adapter, err := githubAdapter(c)
+	if err != nil {
+		return err
 	}
 	if *check {
 		fmt.Println("configuration is valid; no GitHub connectivity verified")
@@ -62,16 +55,15 @@ func run() error {
 		return err
 	}
 	defer s.Close()
-	bindings := map[string]string{}
-	for alias, repo := range c.Repositories {
-		bindings[alias] = fmt.Sprintf("%s:%d", strings.ToLower(repo.FullName), repo.InstallationID)
-	}
-	if err = s.BindRepositories(bindings); err != nil {
+	dynamic, err := newDaemonConfig(gateway.New(c, s, adapter))
+	if err != nil {
 		return err
 	}
-	g := gateway.New(c, s, adapter)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	reloadSignals := make(chan os.Signal, 1)
+	signal.Notify(reloadSignals, syscall.SIGHUP)
+	defer signal.Stop(reloadSignals)
 	type endpoint struct {
 		name     string
 		listener net.Listener
@@ -90,21 +82,21 @@ func run() error {
 		if e != nil {
 			return e
 		}
-		endpoints = append(endpoints, endpoint{"ipc_unix", ln, transport.IPC(g)})
+		endpoints = append(endpoints, endpoint{"ipc_unix", ln, dynamic.handler(false)})
 	}
 	if c.IPC.Bind != "" {
 		ln, e := transport.ListenLoopback(c.IPC.Bind)
 		if e != nil {
 			return e
 		}
-		endpoints = append(endpoints, endpoint{"ipc_tcp", ln, transport.IPC(g)})
+		endpoints = append(endpoints, endpoint{"ipc_tcp", ln, dynamic.handler(false)})
 	}
 	if c.Webhook.Bind != "" {
 		ln, e := net.Listen("tcp", c.Webhook.Bind)
 		if e != nil {
 			return e
 		}
-		endpoints = append(endpoints, endpoint{"webhook", ln, transport.Webhook(g)})
+		endpoints = append(endpoints, endpoint{"webhook", ln, dynamic.handler(true)})
 	}
 	var servers []*http.Server
 	var wg sync.WaitGroup
@@ -124,19 +116,21 @@ func run() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if e := g.RunOutbox(ctx); e != nil {
+		if e := gateway.RunOutbox(ctx, dynamic.gateway); e != nil {
 			fatal <- e
 		}
 	}()
-	if c.Poll.Enabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if e := g.RunPolling(ctx); e != nil {
-				fatal <- e
-			}
-		}()
-	}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if e := gateway.RunPolling(ctx, dynamic.gateway); e != nil {
+			fatal <- e
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		dynamic.watch(ctx, *path, reloadSignals, time.Second)
+	}()
 	slog.Info("github-botd ready", "version", version, "dry_run", c.DryRun, "github_connectivity", "not_live_verified")
 	select {
 	case <-ctx.Done():
