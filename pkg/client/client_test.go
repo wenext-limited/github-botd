@@ -152,6 +152,9 @@ func TestSubscribeSuccessThenCancel(t *testing.T) {
 		}
 		if acked.Load() > 0 {
 			cancel()
+			// Wait for the transport to observe cancellation before returning,
+			// which would otherwise send an empty 200 response to the client.
+			<-r.Context().Done()
 			return
 		}
 		w.Write([]byte(`{"deliveries":[{"id":"d","lease_token":"lease","attempt":2,"event":{"id":"e"}}]}`))
