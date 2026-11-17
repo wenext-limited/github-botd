@@ -46,7 +46,33 @@ type AckRequest struct {
 	Error      string `json:"error,omitempty"`
 }
 
+type TrustedCheck struct {
+	WorkflowPath string `json:"workflow_path,omitempty"`
+	Name         string `json:"name"`
+	AppID        int64  `json:"app_id,omitempty"`
+	CreatorID    int64  `json:"creator_id,omitempty"`
+}
+type BuildEvidence struct {
+	Provider string `json:"provider"`
+	HeadSHA  string `json:"head_sha"`
+	Source   string `json:"source"`
+	Run      int64  `json:"run"`
+}
+
+// MergeEvidence is an attestation by the capability-bearing native client,
+// not a model-facing approval schema. GitHub state is independently re-read.
+type MergeEvidence struct {
+	RequesterID   int64          `json:"requester_id"`
+	BaseSHA       string         `json:"base_sha"`
+	ReviewDigest  string         `json:"review_digest"`
+	Build         *BuildEvidence `json:"build,omitempty"`
+	TrustedChecks []TrustedCheck `json:"-"`
+}
+
 type Action struct {
+	RepositoryID int64          `json:"repository_id,omitempty"`
+	Merge        *MergeEvidence `json:"merge,omitempty"`
+
 	Version        string          `json:"version"`
 	IdempotencyKey string          `json:"idempotency_key"`
 	Kind           string          `json:"kind"`
@@ -99,10 +125,11 @@ type Error struct {
 }
 
 type ClientInfo struct {
-	ID           string   `json:"id"`
-	Protocol     string   `json:"protocol"`
-	Repositories []string `json:"repositories"`
-	Capabilities []string `json:"capabilities"`
+	AllRepositories bool     `json:"all_repositories,omitempty"`
+	ID              string   `json:"id"`
+	Protocol        string   `json:"protocol"`
+	Repositories    []string `json:"repositories"`
+	Capabilities    []string `json:"capabilities"`
 }
 
 type Health struct {

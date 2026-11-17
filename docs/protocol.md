@@ -48,9 +48,9 @@ Exactly seven kinds exist:
 6. `check.create`: create a check run.
 7. `check.update`: update an existing check run, with ownership checks.
 
-There is no approval, request-changes verdict, merge, arbitrary endpoint proxy, repository mutation, or script-execution action. PR review is one client use case, not the daemon's hard-coded purpose.
+The separate `pull.merge` capability supports only guarded Squash merges. There is no approval, request-changes verdict, arbitrary endpoint proxy, general repository mutation or script-execution action. PR review is one client use case, not the daemon's hard-coded purpose.
 
-Actions require `version: "github-botd/v1"`, a 1..128-byte stable `idempotency_key`, kind, and repository alias. Without `actions.proactive`, an `event_id` correlated to that client's routed event is required. The event's repository and supplied issue/PR number must match; replies must target its delivered thread/comment. Authorization is checked again before queued execution.
+Actions require `version: "github-botd/v1"`, a 1..128-byte stable `idempotency_key`, kind, and repository target (canonical `owner/name` or a legacy alias). Without `actions.proactive`, an `event_id` correlated to that client's routed event is required. The event's repository and supplied issue/PR number must match; replies must target its delivered thread/comment. Authorization is checked again before queued execution.
 
 Comment/review actions need positive `number` and content. Updates/replies need positive `comment_id`. Reviews need `head_sha`; the adapter checks the current PR head before posting. Inline comments need nonempty relative path, positive line, `LEFT`/`RIGHT` side, and body. At most 100 inline comments are accepted. Check creation needs `name` and `head_sha`; update needs positive `check_run_id`. Status is `queued`, `in_progress`, or `completed`; only completed checks accept a conclusion, and require one of `success`, `failure`, `neutral`, `cancelled`, `skipped`, `timed_out`, `action_required`.
 
@@ -67,3 +67,41 @@ Application errors have `{"code":"...","message":"..."}`. Typical mappings: 400 
 ## Separate webhook ingress
 
 The webhook listener is distinct from local client IPC. `POST /hooks/{source}` requires JSON, valid `X-Hub-Signature-256` HMAC-SHA256 over the exact raw body, `X-GitHub-Delivery`, and `X-GitHub-Event`. Configured source installation restrictions and repository mappings are checked before durable routing. Valid `ping` returns 200 `{"status":"pong"}`; other accepted input returns 202 `{"accepted":true,"new":true|false}`. Unknown repositories are intentionally ignored. Deduplication is by source plus upstream delivery ID. Duplicate deliveries do not retroactively add route recipients.
+
+## Canonical repositories and guarded merges
+
+A client with `all_repositories: true` may address canonical `owner/name`
+targets reachable by the daemon's machine-user credential without adding alias
+entries. Capabilities remain independent. App installations require configured
+repository/installation routing; ingress/polling also retains its explicit
+repository configuration. Queued execution and receipt access resolve current
+grants, so revocation is not bypassed by an older queued action.
+
+Canonical writes also require `repository_id`, obtained from GitHub context
+(for a PR, `base.repo.id`). The adapter compares this immutable ID before
+writing, so replacing a repository at the same mutable name does not retarget
+an older queued action. Existing alias-only clients remain compatible.
+
+`POST /v1/merge-check` accepts a `pull.merge` Action and reads the live merge
+conditions without writing. It returns `{"ready":true}` only on success. The
+normal action/outbox path repeats verification before execution. The action's
+`merge` evidence contains `requester_id`, `base_sha`, `review_digest` and an
+optional native `build` attestation (`provider:"jenkins"`, `head_sha`, `source`,
+`run`). It must come from a trusted native client with `pull.merge`; this is not
+a schema for exposing identity or verdict fields to a model. iBot constructs
+it from verified turn identity and observed reviewer/Jenkins results.
+
+The daemon requires an open, non-draft PR at the assessed head/base, current
+author/assignee identity, explicit clean mergeability, no outstanding requested
+changes and successful trusted compilation at that head. Operator-configured
+`merge_checks` bind a name to an app/creator ID. GitHub Actions additionally
+requires a matching successful run/check suite and an unchanged trusted
+`workflow_path` between base and head. Native Jenkins sources must be allowed
+by `merge_jenkins_sources`. Missing/pending/failed/skipped/old proof refuses.
+
+Execution sends `PUT /repos/{owner}/{repo}/pulls/{number}/merge` with exactly
+`{"sha":"<reviewed head>","merge_method":"squash"}`. GitHub atomically checks
+the head and mergeability; its endpoint provides no base/assignee CAS, so the
+adapter rereads those just before writing. A response without `merged:true`
+is not success. Ambiguous writes retain the existing uncertain/no-retry
+contract; no admin bypass, force push, branch deletion or auto-merge is added.

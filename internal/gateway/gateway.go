@@ -94,7 +94,8 @@ func (g *Gateway) Submit(client string, a v1.Action) (v1.Receipt, error) {
 	if a.Version != v1.Version {
 		return v1.Receipt{}, errors.New("unsupported protocol version")
 	}
-	if !config.Contains(p.Repositories, a.Repository) || !config.Contains(p.Capabilities, a.Kind) {
+	repo, repoErr := g.ResolveRepository(client, a.Repository)
+	if repoErr != nil || !config.Contains(p.Capabilities, a.Kind) {
 		return v1.Receipt{}, ErrForbidden
 	}
 	if a.EventID == "" && !config.Contains(p.Capabilities, "actions.proactive") {
@@ -129,12 +130,20 @@ func (g *Gateway) Submit(client string, a v1.Action) (v1.Receipt, error) {
 			return v1.Receipt{}, errors.New("review requires head_sha")
 		}
 	}
+	if strings.Contains(a.Repository, "/") && a.RepositoryID <= 0 {
+		return v1.Receipt{}, errors.New("canonical repository writes require an immutable repository_id")
+	}
 	// Validation belongs before the durable outbox so invalid work is rejected synchronously.
 	if err := ValidateAction(a); err != nil {
 		return v1.Receipt{}, err
 	}
+	if a.Kind == "pull.merge" {
+		if err := g.prepareMerge(client, &a); err != nil {
+			return v1.Receipt{}, err
+		}
+	}
 	actual := a
-	actual.Repository = g.Config.Repositories[a.Repository].FullName
+	actual.Repository = repo.FullName
 	if err := gh.ValidateAction(actual); err != nil {
 		return v1.Receipt{}, err
 	}
@@ -151,6 +160,10 @@ func ValidateAction(a v1.Action) error {
 		return errors.New("action content exceeds limit")
 	}
 	switch a.Kind {
+	case "pull.merge":
+		if a.Number <= 0 || a.Merge == nil {
+			return errors.New("merge requires a PR and native review evidence")
+		}
 	case "issue.comment.create", "issue.comment.update", "review.reply", "review.comment", "review.submit":
 		if a.Number <= 0 {
 			return errors.New("positive number required")
@@ -198,11 +211,11 @@ func validateLine(path string, line int, side, body string) error {
 }
 func (g *Gateway) Context(ctx context.Context, client string, r v1.ContextRequest) (json.RawMessage, error) {
 	p, ok := g.Config.Clients[client]
-	if !ok || !config.Contains(p.Capabilities, "context.read") || !config.Contains(p.Repositories, r.Repository) {
+	if !ok || !config.Contains(p.Capabilities, "context.read") {
 		return nil, ErrForbidden
 	}
-	repo, ok := g.Config.Repositories[r.Repository]
-	if !ok {
+	repo, err := g.ResolveRepository(client, r.Repository)
+	if err != nil {
 		return nil, ErrForbidden
 	}
 	if g.GitHub == nil {
@@ -239,20 +252,22 @@ func RunOutbox(ctx context.Context, current func() *Gateway) error {
 		// so a reload during that wait is reflected before authorization.
 		g := current()
 		a := pending.Action
-		repo, ok := g.Config.Repositories[a.Repository]
-		if !ok {
-			if err = g.Store.CompleteAction(pending.Receipt.ID, "failed", nil, "repository removed from config"); err != nil {
+		// Re-evaluate both canonical/alias targeting and capabilities under current policy.
+		repo, repoErr := g.ResolveRepository(pending.Client, a.Repository)
+		p, ok := g.Config.Clients[pending.Client]
+		if repoErr != nil || !ok || !config.Contains(p.Capabilities, a.Kind) || (a.EventID == "" && !config.Contains(p.Capabilities, "actions.proactive")) {
+			if err = g.Store.CompleteAction(pending.Receipt.ID, "failed", nil, "client grant revoked or repository unavailable"); err != nil {
 				return err
 			}
 			continue
 		}
-		// Re-evaluate grants after restart/config changes before executing previously queued work.
-		p, ok := g.Config.Clients[pending.Client]
-		if !ok || !config.Contains(p.Repositories, a.Repository) || !config.Contains(p.Capabilities, a.Kind) || (a.EventID == "" && !config.Contains(p.Capabilities, "actions.proactive")) {
-			if err = g.Store.CompleteAction(pending.Receipt.ID, "failed", nil, "client grant revoked"); err != nil {
-				return err
+		if a.Kind == "pull.merge" {
+			if e := g.prepareMerge(pending.Client, &a); e != nil {
+				if err = g.Store.CompleteAction(pending.Receipt.ID, "failed", nil, e.Error()); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
 		}
 		if g.Config.DryRun {
 			result, _ := json.Marshal(map[string]any{"dry_run": true, "kind": a.Kind, "repository": a.Repository})

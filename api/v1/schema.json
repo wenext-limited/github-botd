@@ -211,7 +211,8 @@
             "review.comment",
             "review.submit",
             "check.create",
-            "check.update"
+            "check.update",
+            "pull.merge"
           ]
         },
         "repository": {
@@ -267,6 +268,13 @@
         },
         "check_run_id": {
           "type": "integer"
+        },
+        "merge": {
+          "$ref": "#/$defs/MergeEvidence"
+        },
+        "repository_id": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "required": [
@@ -423,6 +431,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "all_repositories": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -535,6 +546,58 @@
           }
         }
       }
+    },
+    "MergeEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requester_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$"
+        },
+        "review_digest": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "build": {
+          "$ref": "#/$defs/BuildEvidence"
+        }
+      },
+      "required": [
+        "requester_id",
+        "base_sha",
+        "review_digest"
+      ]
+    },
+    "BuildEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "const": "jenkins"
+        },
+        "head_sha": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "provider",
+        "head_sha",
+        "source",
+        "run"
+      ]
     }
   }
 }

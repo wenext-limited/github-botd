@@ -119,7 +119,7 @@ func IPC(g *gateway.Gateway) http.Handler {
 			return
 		}
 		p := g.Config.Clients[id]
-		jsonResponse(w, 200, v1.ClientInfo{ID: id, Protocol: v1.Version, Repositories: p.Repositories, Capabilities: p.Capabilities})
+		jsonResponse(w, 200, v1.ClientInfo{AllRepositories: p.AllRepositories, ID: id, Protocol: v1.Version, Repositories: p.Repositories, Capabilities: p.Capabilities})
 	})
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := h.auth(w, r)
@@ -251,6 +251,22 @@ func IPC(g *gateway.Gateway) http.Handler {
 		}
 		jsonResponse(w, 200, map[string]string{"status": "requeued"})
 	})
+	mux.HandleFunc("POST /v1/merge-check", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := h.auth(w, r)
+		if !ok {
+			return
+		}
+		var a v1.Action
+		if err := decode(w, r, g.Config.Limits.MaxBodyBytes, &a); err != nil {
+			failure(w, err)
+			return
+		}
+		if err := g.CheckMerge(r.Context(), id, a); err != nil {
+			failure(w, err)
+			return
+		}
+		jsonResponse(w, 200, map[string]bool{"ready": true})
+	})
 	mux.HandleFunc("POST /v1/actions", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := h.auth(w, r)
 		if !ok {
@@ -278,7 +294,7 @@ func IPC(g *gateway.Gateway) http.Handler {
 			failure(w, actionErr)
 			return
 		}
-		if !config.Contains(g.Config.Clients[id].Repositories, action.Repository) {
+		if _, err := g.ResolveRepository(id, action.Repository); err != nil {
 			failure(w, gateway.ErrForbidden)
 			return
 		}

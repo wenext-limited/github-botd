@@ -8,7 +8,7 @@ Inspired by [feishu-botd](https://github.com/wenext-limited/feishu-botd)'s separ
 
 ## What is implemented
 
-- Multiple GitHub App installations/apps, or a machine-user token, with repository aliases and daemon-only credentials.
+- Multiple GitHub App installations/apps, or a machine-user token, with canonical repository targets, optional legacy aliases and daemon-only credentials.
 - HMAC-SHA256 webhook validation, installation/repository allowlists, structured event normalization, and durable deduplication.
 - Explicit routing by repository, event/action, actor, mention, requested reviewer/team, and client; independent multi-client fan-out.
 - Unix-domain IPC with private filesystem permissions and distinct client bearers; optional loopback-only TCP.
@@ -19,7 +19,7 @@ Inspired by [feishu-botd](https://github.com/wenext-limited/feishu-botd)'s separ
 - Go SDK, `github-botctl`, mock client, transparent review integration example, and CI consumer/publisher.
 - Versioned [wire contract](docs/protocol.md), [JSON Schema](api/v1/schema.json), tests, local demo, Dockerfile, and CI workflow.
 
-No merge, approval, request-changes verdict, arbitrary GitHub endpoint proxy, or shell-execution feature is exposed. The daemon does not contain an LLM or execute PR code.
+A separate `pull.merge` capability permits guarded exact-head Squash merges, with native clean-review evidence, a verified author/assignee requester and trusted compilation proof. Approval/request-changes verdicts, arbitrary GitHub endpoint proxies and shell execution are not exposed. The daemon does not contain an LLM or execute PR code.
 
 ## Run the offline demo
 

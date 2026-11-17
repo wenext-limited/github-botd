@@ -26,7 +26,7 @@ func ValidateAction(a v1.Action) error {
 		return failure("unsupported action version")
 	}
 	switch a.Kind {
-	case "issue.comment.create", "review.reply", "review.comment", "review.submit":
+	case "issue.comment.create", "review.reply", "review.comment", "review.submit", "pull.merge":
 		if a.Number <= 0 {
 			return failure("positive issue or pull number required")
 		}
@@ -39,6 +39,10 @@ func ValidateAction(a v1.Action) error {
 		return failure("unsupported GitHub mutation")
 	}
 	switch a.Kind {
+	case "pull.merge":
+		if err := validateMerge(a); err != nil {
+			return err
+		}
 	case "issue.comment.create", "issue.comment.update", "review.reply":
 		if !validBody(a.Body) {
 			return failure("nonempty bounded body required")
@@ -112,25 +116,51 @@ func (c *Client) Execute(ctx context.Context, installationID int64, a v1.Action)
 		return nil, e
 	}
 	base, _ := repoPath(a.Repository)
+	if a.Kind == "pull.merge" {
+		if e := c.CheckMerge(ctx, installationID, a); e != nil {
+			return nil, e
+		}
+	}
 	if a.Kind == "review.comment" || a.Kind == "review.submit" {
 		b, _, err := c.request(ctx, "GET", fmt.Sprintf("%s/pulls/%d", base, a.Number), token, nil, false)
 		if err != nil {
 			return nil, err
 		}
 		var pr struct {
+			Base struct {
+				Repo struct {
+					ID int64 `json:"id"`
+				} `json:"repo"`
+			} `json:"base"`
 			Head struct {
 				SHA string `json:"sha"`
 			} `json:"head"`
 		}
-		if json.Unmarshal(b, &pr) != nil || !strings.EqualFold(pr.Head.SHA, a.HeadSHA) {
+		if json.Unmarshal(b, &pr) != nil || !strings.EqualFold(pr.Head.SHA, a.HeadSHA) || a.RepositoryID > 0 && pr.Base.Repo.ID != a.RepositoryID {
 			return nil, failure("pull request head changed; refresh context before reviewing")
 		}
 	}
 
+	if a.RepositoryID > 0 && a.Kind != "pull.merge" && a.Kind != "review.submit" && a.Kind != "review.comment" {
+		b, _, err := c.request(ctx, "GET", base, token, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		var repo struct {
+			ID int64 `json:"id"`
+		}
+		if json.Unmarshal(b, &repo) != nil || repo.ID != a.RepositoryID {
+			return nil, failure("repository identity changed before write")
+		}
+	}
 	method := "POST"
 	path := ""
 	p := map[string]any{}
 	switch a.Kind {
+	case "pull.merge":
+		method = "PUT"
+		path = fmt.Sprintf("%s/pulls/%d/merge", base, a.Number)
+		p = map[string]any{"sha": a.HeadSHA, "merge_method": "squash"}
 	case "issue.comment.create":
 		path = fmt.Sprintf("%s/issues/%d/comments", base, a.Number)
 		p["body"] = a.Body
@@ -231,6 +261,14 @@ func (c *Client) Execute(ctx context.Context, installationID int64, a v1.Action)
 		}
 	}
 	b, _, e := c.request(ctx, method, path, token, p, true)
+	if e == nil && a.Kind == "pull.merge" {
+		var result struct {
+			Merged bool `json:"merged"`
+		}
+		if json.Unmarshal(b, &result) != nil || !result.Merged {
+			return nil, failure("GitHub did not merge this PR")
+		}
+	}
 	return b, e
 }
 

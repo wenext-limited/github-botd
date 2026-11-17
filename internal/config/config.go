@@ -15,12 +15,13 @@ import (
 	"strings"
 	"syscall"
 
+	v1 "github.com/wenext-limited/github-botd/api/v1"
 	gh "github.com/wenext-limited/github-botd/internal/github"
 )
 
 var aliasRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 var repositoryRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
-var Capabilities = map[string]bool{"events.read": true, "events.replay": true, "context.read": true, "issue.comment.create": true, "issue.comment.update": true, "review.reply": true, "review.comment": true, "review.submit": true, "check.create": true, "check.update": true, "actions.proactive": true}
+var Capabilities = map[string]bool{"events.read": true, "events.replay": true, "context.read": true, "issue.comment.create": true, "issue.comment.update": true, "review.reply": true, "review.comment": true, "review.submit": true, "check.create": true, "check.update": true, "actions.proactive": true, "pull.merge": true}
 
 type Config struct {
 	Version      int                   `json:"version"`
@@ -68,11 +69,16 @@ type Repository struct {
 	InstallationID int64  `json:"installation_id,omitempty"`
 }
 type Client struct {
-	TokenEnv     string   `json:"token_env,omitempty"`
-	TokenFile    string   `json:"token_file,omitempty"`
-	Repositories []string `json:"repositories"`
-	Capabilities []string `json:"capabilities"`
-	Token        string   `json:"-"`
+	MergeChecks         []v1.TrustedCheck `json:"merge_checks,omitempty"`
+	MergeJenkinsSources []string          `json:"merge_jenkins_sources,omitempty"`
+
+	// AllRepositories allows canonical owner/name targets reachable by the machine-user credential.
+	AllRepositories bool     `json:"all_repositories,omitempty"`
+	TokenEnv        string   `json:"token_env,omitempty"`
+	TokenFile       string   `json:"token_file,omitempty"`
+	Repositories    []string `json:"repositories"`
+	Capabilities    []string `json:"capabilities"`
+	Token           string   `json:"-"`
 }
 type Route struct {
 	ID           string   `json:"id"`
@@ -172,8 +178,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("webhook: %w", err)
 		}
 	}
-	if len(c.Repositories) == 0 || len(c.Clients) == 0 {
-		return errors.New("repositories and clients are required")
+	if len(c.Clients) == 0 {
+		return errors.New("clients are required")
 	}
 	if c.Limits.MaxBodyBytes == 0 {
 		c.Limits.MaxBodyBytes = 2 << 20
@@ -229,12 +235,20 @@ func (c *Config) Validate() error {
 		}
 		tokens = append(tokens, token)
 		p.Token = token
-		if len(p.Repositories) == 0 {
+		if p.AllRepositories && len(c.GitHub.Apps) > 0 {
+			return fmt.Errorf("client %s: all_repositories requires machine-user authentication", id)
+		}
+		if len(p.Repositories) == 0 && !p.AllRepositories {
 			return fmt.Errorf("client %s must have repositories", id)
 		}
 		for _, a := range p.Repositories {
 			if _, ok := c.Repositories[a]; !ok {
 				return fmt.Errorf("client %s references unknown repository %s", id, a)
+			}
+		}
+		for _, check := range p.MergeChecks {
+			if check.Name == "" || len(check.Name) > 255 || (check.AppID <= 0) == (check.CreatorID <= 0) || check.WorkflowPath != "" && (!strings.HasPrefix(check.WorkflowPath, ".github/workflows/") || strings.Contains(check.WorkflowPath, "..") || strings.ContainsAny(check.WorkflowPath, "\\?&#")) {
+				return fmt.Errorf("client %s: merge_checks require an exact name and one trusted app_id or creator_id", id)
 			}
 		}
 		for _, cap := range p.Capabilities {
